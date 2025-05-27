@@ -1,19 +1,17 @@
 module coral::market;
 
-use std::type_name::{Self, TypeName};
+use std::type_name;
 
-use sui::balance::{Supply, Balance};
-use sui::vec_map::{Self, VecMap};
-use sui::clock::Clock;
+use sui::balance::{Self, Supply, Balance};
+use sui::coin::{Coin, CoinMetadata};
 use sui::dynamic_field;
-use sui::coin::Coin;
+use sui::clock::Clock;
 use sui::sui::SUI;
 
 use interest_math::fixed18;
 
+use coral::outcome::{Self, Outcome, OutcomeSnapshot};
 use coral::lmsr;
-use sui::coin::CoinMetadata;
-use sui::balance;
 
 public struct Market has key, store {
     id: UID,
@@ -41,17 +39,8 @@ public struct MarketBalances<phantom T> has store {
     fee_balance: Balance<T>
 }
 
-public enum Outcome has copy, store, drop {
-    SAFE(TypeName),
-    RISKY(TypeName),
-}
-
 public struct OutcomeSupply<phantom T>(Supply<T>) has store;
 
-public struct OutcomeSnapshot {
-    market_id: ID,
-    data: VecMap<Outcome, u64>,
-}
 
 public struct OutcomeSupplyKey<phantom T>() has copy, store, drop;
 public struct MarketBalancesKey<phantom T>() has copy, store, drop;
@@ -60,7 +49,6 @@ const EOutcomeTypeMismatch: u64 = 2;
 const EMarketIDSnapshotMismatch: u64 = 3;
 const EInvalidOutcomeSnapshot: u64 = 4;
 const EInsufficientPayment: u64 = 5;
-const EDuplicateOutcome: u64 = 6;
 const EInvalidOutcomeAmount: u64 = 7;
 const EMarketTypeMismatch: u64 = 8;
 const EUnAuthorizedMarketAccess: u64 = 9;
@@ -71,8 +59,8 @@ const DEFAULT_OUTCOME_DECIMALS: u64 = 9;
 const DEFAULT_LIQUIDITY_PARAM: u64 = 1000; 
 
 public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID, clock: &Clock, ctx: &mut TxContext): (Market, MarketManagerCap) {
-    let safe_outcome = Outcome::SAFE(type_name::get<SAFE>());
-    let risky_outcome = Outcome::RISKY(type_name::get<RISKY>());
+    let safe_outcome = outcome::safe(type_name::get<SAFE>());
+    let risky_outcome = outcome::risky(type_name::get<RISKY>());
 
     let mut market = Market {
         blob_id,
@@ -138,26 +126,25 @@ public fun close_market(market: &mut Market, cap: &MarketManagerCap) {
 }
 
 public fun initialize_outcome_snapshot(market: &Market): OutcomeSnapshot {
-    OutcomeSnapshot {
-        data: vec_map::empty(),
-        market_id: market.id.to_inner(),
-    }
+    assert!(market.resolved_at_ms.is_none(), EMarketTypeMismatch);
+    assert!(market.outcomes.length() == 2, EInvalidOutcomeSnapshot);
+
+    outcome::create_outcome_snapshot(market.id.to_inner())
 }
 
 public fun add_outcome_snapshot_data<T>(market: &Market, snapshot: &mut OutcomeSnapshot, outcome: Outcome) {
-    assert!(!snapshot.data.contains(&outcome), EDuplicateOutcome);
-    assert!(type_name::get<T>() == outcome.outcome_type(), EOutcomeTypeMismatch);
+    assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
     assert!(market.id.to_inner() == market.id.to_inner(), EMarketIDSnapshotMismatch);
 
     let supply = market.outcome_supply<T>();
-    snapshot.data.insert(outcome, supply.0.supply_value());
+    snapshot.add_outcome_snapshot_data(outcome, supply.0.supply_value());
 }
 
 public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outcome: Outcome, amount: u64, metadata: &CoinMetadata<SUI>, payment: Coin<SUI>, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
     assert!(amount > 0, EInvalidOutcomeAmount);
-    assert!(type_name::get<T>() == outcome.outcome_type(), EOutcomeTypeMismatch);
+    assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
-    let OutcomeSnapshot { data, market_id } = snapshot;
+    let (market_id, data) = snapshot.destroy_outcome_snapshot();
     assert!(market.id.to_inner() == market_id, EMarketIDSnapshotMismatch);
     
     let (outcomes, balances) = data.into_keys_values();
@@ -174,9 +161,9 @@ public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outcom
 
 public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outcome: Outcome, coin: Coin<T>, ctx: &mut TxContext): Coin<SUI> {
     assert!(coin.value() > 0, EInvalidOutcomeAmount);
-    assert!(type_name::get<T>() == outcome.outcome_type(), EOutcomeTypeMismatch);
+    assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
-    let OutcomeSnapshot { data, market_id } = snapshot;
+    let (market_id, data ) = snapshot.destroy_outcome_snapshot();
     assert!(market.id.to_inner() == market_id, EMarketIDSnapshotMismatch);
     
     let (outcomes, balances) = data.into_keys_values();
@@ -192,7 +179,7 @@ public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outco
 public fun redeem<T>(market: &mut Market, coin: Coin<T>, ctx: &mut TxContext): Coin<SUI> {
     assert!(market.resolved_at_ms.is_some(), EMarketTypeMismatch);
     market.winning_outcome.do!(|outcome| {
-        assert!(type_name::get<T>() == outcome.outcome_type(), EOutcomeTypeMismatch);
+        assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
     });
 
     withdraw_internal<T>(market, coin.value(), coin, ctx)
@@ -225,13 +212,6 @@ fun withdraw_internal<T>(market: &mut Market, amount: u64, coin: Coin<T>, ctx: &
 
     market_balances_mut.fee_balance.join(fee);
     payment.into_coin(ctx)
-}
-
-public fun outcome_type(outcome: &Outcome): &TypeName {
-    match (outcome) {
-        Outcome::SAFE(t) => t,
-        Outcome::RISKY(t) => t
-    }
 }
 
 public fun outcome_supply<T>(market: &Market): &OutcomeSupply<T> {
