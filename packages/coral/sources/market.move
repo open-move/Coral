@@ -15,7 +15,7 @@ use coral::lmsr;
 use sui::coin::CoinMetadata;
 use sui::balance;
 
-public struct Market has key {
+public struct Market has key, store {
     id: UID,
     blob_id: ID,
     created_at_ms: u64,
@@ -23,6 +23,11 @@ public struct Market has key {
     outcomes: vector<Outcome>,
     resolved_at_ms: Option<u64>,
     winning_outcome: Option<Outcome>
+}
+
+public struct MarketManagerCap has key {
+    id: UID,
+    market_id: ID
 }
 
 public struct MarketConfig has copy, store, drop {
@@ -58,12 +63,14 @@ const EInsufficientPayment: u64 = 5;
 const EDuplicateOutcome: u64 = 6;
 const EInvalidOutcomeAmount: u64 = 7;
 const EMarketTypeMismatch: u64 = 8;
+const EUnAuthorizedMarketAccess: u64 = 9;
+const EDuplicateBlobID: u64 = 10;
 
 const DEFAULT_FEE_BPS: u64 = 100;
 const DEFAULT_OUTCOME_DECIMALS: u64 = 9;
 const DEFAULT_LIQUIDITY_PARAM: u64 = 1000; 
 
-public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID, clock: &Clock, ctx: &mut TxContext): Market {
+public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID, clock: &Clock, ctx: &mut TxContext): (Market, MarketManagerCap) {
     let safe_outcome = Outcome::SAFE(type_name::get<SAFE>());
     let risky_outcome = Outcome::RISKY(type_name::get<RISKY>());
 
@@ -80,7 +87,7 @@ public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID
             coin_decimals: DEFAULT_OUTCOME_DECIMALS,
         },
     };
-    
+
     let safe_supply = balance::create_supply<SAFE>(safe);
     let risky_supply = balance::create_supply<RISKY>(risky);
 
@@ -91,16 +98,43 @@ public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID
         fee_balance: balance::zero<SUI>(),
     });
 
-    market
+    let market_id = market.id.to_inner();
+    (market, MarketManagerCap { id: object::new(ctx), market_id })
 }
 
-public fun update_blob_id(market: &mut Market, blob_id: ID) {
+public fun transfer_cap(cap: MarketManagerCap, recipient: address) {
+    transfer::transfer(cap, recipient)
+}
+
+public fun update_blob_id(market: &mut Market, cap: &MarketManagerCap, blob_id: ID) {
+    assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+    assert!(market.blob_id != blob_id, EDuplicateBlobID);
+
     market.blob_id = blob_id;
 }
 
-public fun update_market_fee_bps(market: &mut Market, fee_bps: u64) {
+public fun update_market_fee_bps(market: &mut Market, cap: &MarketManagerCap, fee_bps: u64) {
+    assert!(market.resolved_at_ms.is_none(), EMarketTypeMismatch);
+    assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+
     assert!(fee_bps <= 1000, EMarketTypeMismatch);
     market.config.fee_bps = fee_bps;
+}
+
+public fun resolve_market(market: &mut Market, cap: &MarketManagerCap, outcome: Outcome, clock: &Clock) {
+    assert!(market.resolved_at_ms.is_none(), EMarketTypeMismatch);
+    assert!(market.outcomes.contains(&outcome), EOutcomeTypeMismatch);
+    assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+
+    market.winning_outcome = option::some(outcome);
+    market.resolved_at_ms = option::some(clock.timestamp_ms());
+}
+
+public fun close_market(market: &mut Market, cap: &MarketManagerCap) {
+    assert!(market.resolved_at_ms.is_some(), EMarketTypeMismatch);
+    assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+
+    abort 0
 }
 
 public fun initialize_outcome_snapshot(market: &Market): OutcomeSnapshot {
@@ -162,14 +196,6 @@ public fun redeem<T>(market: &mut Market, coin: Coin<T>, ctx: &mut TxContext): C
     });
 
     withdraw_internal<T>(market, coin.value(), coin, ctx)
-}
-
-public fun resolve_market(market: &mut Market, outcome: Outcome, clock: &Clock) {
-    assert!(market.resolved_at_ms.is_none(), EMarketTypeMismatch);
-    assert!(market.outcomes.contains(&outcome), EOutcomeTypeMismatch);
-
-    market.winning_outcome = option::some(outcome);
-    market.resolved_at_ms = option::some(clock.timestamp_ms());
 }
 
 fun deposit_internal<T>(market: &mut Market, amount: u64, cost: u64, mut coin: Coin<SUI>, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
