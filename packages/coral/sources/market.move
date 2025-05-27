@@ -53,6 +53,8 @@ const EUnAuthorizedMarketAccess: u64 = 9;
 const EDuplicateBlobID: u64 = 10;
 const EMarketResolved: u64 = 11;
 const EMarketNotResolved: u64 = 12;
+const ETooMuchCost: u64 = 13;
+const ETooLittleRevenue: u64 = 14;
 
 const DEFAULT_FEE_BPS: u64 = 100;
 const DEFAULT_OUTCOME_DECIMALS: u64 = 9;
@@ -138,20 +140,22 @@ public fun add_outcome_snapshot_data<T>(market: &Market, snapshot: &mut OutcomeS
     snapshot.add_outcome_snapshot_data(outcome, supply.0.supply_value());
 }
 
-public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outcome: Outcome, amount: u64, metadata: &CoinMetadata<SUI>, payment: Coin<SUI>, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
+public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, metadata: &CoinMetadata<SUI>, payment: Coin<SUI>, outcome: Outcome, amount: u64, max_cost: u64, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
     assert!(amount > 0, EInvalidOutcomeAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
     let cost = snapshot.net_cost(outcome, market.id.to_inner(), market.config.liquidity_param, amount);
+    assert!(cost.lte(fixed18::from_u64(max_cost)), ETooMuchCost);
     assert!(cost.lte(fixed18::from_u64(payment.value())), EInsufficientPayment);
     deposit_internal<T>(market, amount, cost.to_u64(metadata.get_decimals()), payment, ctx)
 }
 
-public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outcome: Outcome, coin: Coin<T>, ctx: &mut TxContext): Coin<SUI> {
+public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, coin: Coin<T>, outcome: Outcome, min_revenue: u64, ctx: &mut TxContext): Coin<SUI> {
     assert!(coin.value() > 0, EInvalidOutcomeAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
     let revenue = snapshot.net_revenue(outcome, market.id.to_inner(), market.config.liquidity_param, coin.value());
+    assert!(revenue.gte(fixed18::from_u64(min_revenue)), ETooLittleRevenue);
     withdraw_internal<T>(market, revenue.to_u64(9), coin, ctx)
 }
 
