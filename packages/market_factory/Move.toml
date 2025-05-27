@@ -1,11 +1,11 @@
 [package]
-name = "Coral"
+name = "MarketFactory"
 edition = "2024.beta" # edition = "legacy" to use legacy (pre-2024) Move
 # license = ""           # e.g., "MIT", "GPL", "Apache 2.0"
 # authors = ["..."]      # e.g., ["Joe Smith (joesmith@noemail.com)", "John Snow (johnsnow@noemail.com)"]
 
 [dependencies]
-InterestMath = { git = "https://github.com/interest-protocol/interest-math.git", rev = "main" }
+Coral = { local = "../coral" }
 
 # For remote import, use the `{ git = "...", subdir = "...", rev = "..." }`.
 # Revision can be a branch, a tag, and a commit hash.
@@ -19,6 +19,7 @@ InterestMath = { git = "https://github.com/interest-protocol/interest-math.git",
 # Override = { local = "../conflicting/version", override = true }
 
 [addresses]
+market_factory = "0x0"
 coral = "0x0"
 
 # Named addresses will be accessible in Move as `@name`. They're also exported:
