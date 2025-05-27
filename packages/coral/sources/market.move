@@ -11,7 +11,6 @@ use sui::sui::SUI;
 use interest_math::fixed18;
 
 use coral::outcome::{Self, Outcome, OutcomeSnapshot};
-use coral::lmsr;
 
 public struct Market has key, store {
     id: UID,
@@ -47,12 +46,13 @@ public struct MarketBalancesKey<phantom T>() has copy, store, drop;
 
 const EOutcomeTypeMismatch: u64 = 2;
 const EMarketIDSnapshotMismatch: u64 = 3;
-const EInvalidOutcomeSnapshot: u64 = 4;
 const EInsufficientPayment: u64 = 5;
 const EInvalidOutcomeAmount: u64 = 7;
 const EMarketTypeMismatch: u64 = 8;
 const EUnAuthorizedMarketAccess: u64 = 9;
 const EDuplicateBlobID: u64 = 10;
+const EMarketResolved: u64 = 11;
+const EMarketNotResolved: u64 = 12;
 
 const DEFAULT_FEE_BPS: u64 = 100;
 const DEFAULT_OUTCOME_DECIMALS: u64 = 9;
@@ -126,9 +126,7 @@ public fun close_market(market: &mut Market, cap: &MarketManagerCap) {
 }
 
 public fun initialize_outcome_snapshot(market: &Market): OutcomeSnapshot {
-    assert!(market.resolved_at_ms.is_none(), EMarketTypeMismatch);
-    assert!(market.outcomes.length() == 2, EInvalidOutcomeSnapshot);
-
+    assert!(market.resolved_at_ms.is_none(), EMarketResolved);
     outcome::create_outcome_snapshot(market.id.to_inner())
 }
 
@@ -144,17 +142,7 @@ public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outcom
     assert!(amount > 0, EInvalidOutcomeAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
-    let (market_id, data) = snapshot.destroy_outcome_snapshot();
-    assert!(market.id.to_inner() == market_id, EMarketIDSnapshotMismatch);
-    
-    let (outcomes, balances) = data.into_keys_values();
-    let (_, outcome_index) = outcomes.index_of(&outcome);
-    assert!(outcomes.length() == 2 && balances.length() == 2, EInvalidOutcomeSnapshot);
-
-    let outcome_amounts = balances.map!(|v| { fixed18::from_u64(v) });
-    let liquidity_param = fixed18::from_u64(market.config.liquidity_param);
-    let cost = lmsr::net_cost(outcome_amounts, liquidity_param, fixed18::from_u64(amount), outcome_index);
-
+    let cost = snapshot.net_cost(outcome, market.id.to_inner(), market.config.liquidity_param, amount);
     assert!(cost.lte(fixed18::from_u64(payment.value())), EInsufficientPayment);
     deposit_internal<T>(market, amount, cost.to_u64(metadata.get_decimals()), payment, ctx)
 }
@@ -163,21 +151,12 @@ public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, outco
     assert!(coin.value() > 0, EInvalidOutcomeAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
-    let (market_id, data ) = snapshot.destroy_outcome_snapshot();
-    assert!(market.id.to_inner() == market_id, EMarketIDSnapshotMismatch);
-    
-    let (outcomes, balances) = data.into_keys_values();
-    let (_, outcome_index) = outcomes.index_of(&outcome);
-    assert!(outcomes.length() == 2 && balances.length() == 2, EInvalidOutcomeSnapshot);
-
-    let outcome_amounts = balances.map!(|v| { fixed18::from_u64(v) });
-    let liquidity_param = fixed18::from_u64(market.config.liquidity_param);
-    let revenue = lmsr::net_revenue(outcome_amounts, liquidity_param, fixed18::from_u64(coin.value()), outcome_index);
+    let revenue = snapshot.net_revenue(outcome, market.id.to_inner(), market.config.liquidity_param, coin.value());
     withdraw_internal<T>(market, revenue.to_u64(9), coin, ctx)
 }
 
 public fun redeem<T>(market: &mut Market, coin: Coin<T>, ctx: &mut TxContext): Coin<SUI> {
-    assert!(market.resolved_at_ms.is_some(), EMarketTypeMismatch);
+    assert!(market.resolved_at_ms.is_some(), EMarketNotResolved);
     market.winning_outcome.do!(|outcome| {
         assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
     });
