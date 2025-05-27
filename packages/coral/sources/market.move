@@ -40,21 +40,20 @@ public struct MarketBalances<phantom T> has store {
 
 public struct OutcomeSupply<phantom T>(Supply<T>) has store;
 
-
 public struct OutcomeSupplyKey<phantom T>() has copy, store, drop;
 public struct MarketBalancesKey<phantom T>() has copy, store, drop;
 
+const EUnAuthorizedMarketAccess: u64 = 1;
 const EOutcomeTypeMismatch: u64 = 2;
 const EMarketIDSnapshotMismatch: u64 = 3;
-const EInsufficientPayment: u64 = 5;
-const EInvalidOutcomeAmount: u64 = 7;
-const EMarketTypeMismatch: u64 = 8;
-const EUnAuthorizedMarketAccess: u64 = 9;
-const EDuplicateBlobID: u64 = 10;
-const EMarketResolved: u64 = 11;
-const EMarketNotResolved: u64 = 12;
-const ETooMuchCost: u64 = 13;
-const ETooLittleRevenue: u64 = 14;
+const EInsufficientPayment: u64 = 4;
+const EZeroAmount: u64 = 5;
+const EMarketTypeMismatch: u64 = 6;
+const EDuplicateBlobID: u64 = 7;
+const EMarketResolved: u64 = 8;
+const EMarketNotResolved: u64 = 9;
+const ETooMuchCost: u64 = 10;
+const ETooLittleRevenue: u64 = 11;
 
 const DEFAULT_FEE_BPS: u64 = 100;
 const DEFAULT_OUTCOME_DECIMALS: u64 = 9;
@@ -141,7 +140,7 @@ public fun add_outcome_snapshot_data<T>(market: &Market, snapshot: &mut OutcomeS
 }
 
 public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, metadata: &CoinMetadata<SUI>, payment: Coin<SUI>, outcome: Outcome, amount: u64, max_cost: u64, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
-    assert!(amount > 0, EInvalidOutcomeAmount);
+    assert!(amount > 0, EZeroAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
     let cost = snapshot.net_cost(outcome, market.id.to_inner(), market.config.liquidity_param, amount);
@@ -151,7 +150,7 @@ public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, metada
 }
 
 public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, coin: Coin<T>, outcome: Outcome, min_revenue: u64, ctx: &mut TxContext): Coin<SUI> {
-    assert!(coin.value() > 0, EInvalidOutcomeAmount);
+    assert!(coin.value() > 0, EZeroAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
     let revenue = snapshot.net_revenue(outcome, market.id.to_inner(), market.config.liquidity_param, coin.value());
@@ -166,6 +165,15 @@ public fun redeem<T>(market: &mut Market, coin: Coin<T>, ctx: &mut TxContext): C
     });
 
     withdraw_internal<T>(market, coin.value(), coin, ctx)
+}
+
+public fun withdraw_fee(market: &mut Market, cap: &MarketManagerCap, amount: u64, ctx: &mut TxContext): Coin<SUI> {
+    assert!(amount > 0, EZeroAmount);
+    assert!(market.resolved_at_ms.is_some(), EMarketNotResolved);
+    assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+
+    let market_balances_mut = market_balances_mut<SUI>(market);
+    market_balances_mut.fee_balance.split(amount).into_coin(ctx)
 }
 
 fun deposit_internal<T>(market: &mut Market, amount: u64, cost: u64, mut coin: Coin<SUI>, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
@@ -214,5 +222,5 @@ public fun market_balances_mut<T>(market: &mut Market): &mut MarketBalances<T> {
 }
 
 public fun calculate_fee(market: &Market, amount: u64): u64 {
-    (amount * market.config.fee_bps) / 10000
+    fixed18::from_u64(amount).mul_down(fixed18::from_u64(market.config.fee_bps)).to_u64(9)
 }
