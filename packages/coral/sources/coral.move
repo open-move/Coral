@@ -1,1 +1,0 @@
-module coral::coral;
