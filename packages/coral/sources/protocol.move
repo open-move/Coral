@@ -1,0 +1,2 @@
+module coral::protocol;
+
