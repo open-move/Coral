@@ -1,185 +1,198 @@
 module coral::lmsr;
 
 use interest_math::fixed18::{Self, Fixed18};
+use interest_math::i256;
+use interest_math::u256;
 
-const ERR_EMPTY: u64 = 1;
-const ERR_ZERO_LIQ: u64 = 2;
-const ERR_UNDERFLOW: u64 = 3;
+const ERR_UNDERFLOW: u64 = 1;
 
-const MAX_ITER: u64 = 30; 
-const LN_ITER: u64 = 20;  
-
-public fun exp_fixed18(x: Fixed18): Fixed18 {
-    let threshold = fixed18::from_u64(10);
-    if (x.gt(threshold)) {
-        let half = x.div_down(fixed18::from_u64(2));
-        let exp_half = exp_fixed18(half);
-        return exp_half.mul_down(exp_half)
-    };
-    
-    let mut sum  = fixed18::one();
-    let mut term = fixed18::one();
-    let mut i = 1;
-
-    while (i <= MAX_ITER) {
-        term = term.mul_down(x).div_down(fixed18::from_u64(i));
-        
-        // Early termination if term becomes negligible (less than 0.000001)
-        // Using division to create small value since from_raw not available
-        let epsilon = fixed18::one().div_down(fixed18::from_u64(1000000));
-        if (term.lt(epsilon)) break;
-
-        sum = sum.add(term);
-        i = i + 1;
-    };
-
-    sum
-}
-
-public fun ln_fixed18(x: Fixed18): Fixed18 {
-    assert!(x.gt(fixed18::zero()), ERR_UNDERFLOW);
-
-    let one = fixed18::one();
-    let two = fixed18::from_u64(2);
-    
-    let lower_bound = one.div_down(two);
-    let upper_bound = two;
-    
-    if (x.gte(lower_bound) && x.lte(upper_bound)) {
-        let z = x.sub(one);
-        let mut sum = fixed18::zero();
-        let mut term = z;
-        let mut sign = true; // positive
-        
-        let mut i = 1;
-        while (i <= MAX_ITER) {
-            let divisor = fixed18::from_u64(i);
-            let contribution = term.div_down(divisor);
-            
-            if (sign) {
-                sum = sum.add(contribution);
-            } else {
-                sum = sum.sub(contribution);
-            };
-            
-            term = term.mul_down(z);
-            sign = !sign;
-            
-            // Early termination if term becomes negligible
-            let epsilon = one.div_down(fixed18::from_u64(1000000));
-            if (contribution.lt(epsilon)) {
-                break
-            };
-            
-            i = i + 1;
-        };
-        
-        return sum
-    };
-
-    let mut scaled_x = x;
-    let mut scale_up = 0u64;
-    let mut scale_down = 0u64;
-    
-    while (scaled_x.gt(two)) {
-        scaled_x = scaled_x.div_down(two);
-        scale_down = scale_down + 1;
-    };
-    
-    while (scaled_x.lt(lower_bound)) {
-        scaled_x = scaled_x.mul_down(two);
-        scale_up = scale_up + 1;
-    };
-    
-    let mut y = scaled_x.sub(one); // Initial guess
-    let mut i = 0;
-    
-    while (i < LN_ITER) {
-        let e_y = exp_fixed18(y);
-        let delta = e_y.sub(scaled_x).div_down(e_y);
-        
-        // Check for convergence
-        let epsilon = one.div_down(fixed18::from_u64(10000000));
-        let abs_delta = if (delta.gt(fixed18::zero())) { delta } else { fixed18::zero().sub(delta) };
-        if (abs_delta.lt(epsilon)) {
-            break
-        };
-        
-        y = y.sub(delta);
-        i = i + 1;
-    };
-    
-    let ln2_numerator = fixed18::from_u64(693147180559945309);
-    let ln2_denominator = fixed18::from_u64(1000000000000000000);
-    let ln2 = ln2_numerator.div_down(ln2_denominator);
-    
-    let mut result = y;
-    if (scale_down > 0) {
-        let k_fixed = fixed18::from_u64(scale_down);
-        result = result.add(k_fixed.mul_down(ln2));
-    };
-    if (scale_up > 0) {
-        let k_fixed = fixed18::from_u64(scale_up);
-        result = result.sub(k_fixed.mul_down(ln2));
-    };
-    
-    result
-}
-
-public fun cost(outcomes: vector<Fixed18>, b: Fixed18): Fixed18 {
-    let len = vector::length(&outcomes);
-    assert!(outcomes.length() > 0, ERR_EMPTY);
-    assert!(!b.is_zero(), ERR_ZERO_LIQ);
-
-    if (len == 1) return outcomes[0];
-
-    // 1) find max(q)
-    let mut max_q = outcomes[0];
-    let mut j = 1;
-    while (j < len) {
-        let cur = *vector::borrow(&outcomes, j);
-        if (cur.gt(max_q)) {
-            max_q = cur;
-        };
-
-        j = j + 1;
-    };
-
-    // 2) compute exp_max = exp(max_q/b)
-    let exp_max = exp_fixed18(max_q.div_down(b));
-
-    // 3) sum_scaled = Σ exp(qᵢ/b) / exp_max
-    let mut sum_scaled = fixed18::zero();
-    len.do!(|i| {
-        let q_i = outcomes[i];
-        let divi = q_i.div_down(b);
-        let scaled = exp_fixed18(divi).div_down(exp_max);
-        sum_scaled = sum_scaled.add(scaled);
-    });
-
-    // 4) ln_sum and assemble
-    let ln_sum = ln_fixed18(sum_scaled);
-    max_q.add(b.mul_down(ln_sum))
-}
+// Constants
+const ONE: u256 = 1_000_000_000_000_000_000; // 1e18
+const I256_SCALE: u256 = 79228162514264337593543950336; // 2^96
 
 public fun net_cost(mut outcomes: vector<Fixed18>, b: Fixed18, amount: Fixed18, outcome_index: u64): Fixed18 {
-    let initial_cost = cost(outcomes, b);
+    let initial_cost = lmsr_cost(outcomes, b);
 
     let outcome = &mut outcomes[outcome_index];
     *outcome = (*outcome).add(amount);
 
-    let final_cost = cost(outcomes, b);
+    let final_cost = lmsr_cost(outcomes, b);
     assert!(final_cost.gte(initial_cost), ERR_UNDERFLOW);
     final_cost.sub(initial_cost)
 }
 
 public fun net_revenue(mut outcomes: vector<Fixed18>, b: Fixed18, amount: Fixed18, outcome_index: u64): Fixed18 {
-    let initial_cost = cost(outcomes, b);
+    let initial_cost = lmsr_cost(outcomes, b);
 
     let outcome = &mut outcomes[outcome_index];
     assert!((*outcome).gte(amount), ERR_UNDERFLOW);
 
     *outcome = (*outcome).sub(amount);
-    initial_cost.sub(cost(outcomes, b))
+    initial_cost.sub(lmsr_cost(outcomes, b))
 }
 
+
+// Numerically stable LMSR cost function using log-sum-exp trick
+// Cost(q) = m + b × ln(sum of e^((q_i - m) / b))
+// where m = max(q_i)
+public fun lmsr_cost(quantities: vector<Fixed18>, b: Fixed18): Fixed18 {
+    let len = quantities.length();
+    assert!(!fixed18::is_zero(b), 2);
+    
+
+    let max_q = find_max(&quantities);
+    let b_raw = fixed18::raw_value(b);
+    let max_q_raw = fixed18::raw_value(max_q);
+    
+    // Compute sum of e^((q_i - max) / b)
+    let  (mut sum_exp, mut i) = (0u256, 0);
+    while (i < len) {
+        let q_i = quantities[i];
+        let q_i_raw = fixed18::raw_value(q_i);
+        
+        // Compute (q_i - max_q) / b
+        // This will be negative or zero, so we need signed arithmetic
+        let diff = if (q_i_raw >= max_q_raw) {
+            // Should only be equal, not greater
+            i256::from_u256(0)
+        } else {
+            // q_i < max_q, so this is negative
+            i256::negative_from_u256(max_q_raw - q_i_raw)
+        };
+        
+        // Scale to i256 format (2^96 scaling)
+        let diff_scaled = if (i256::is_negative(diff)) {
+            let abs_val = i256::to_u256(i256::abs(diff));
+            let scaled = u256::mul_div_down(abs_val, I256_SCALE, ONE);
+            i256::negative_from_u256(scaled)
+        } else {
+            i256::from_u256(0)
+        };
+        
+        // Divide by b (in i256 scale)
+        let b_scaled = u256::mul_div_down(b_raw, I256_SCALE, ONE);
+        let b_i256 = i256::from_u256(b_scaled);
+        let exponent = i256::div(diff_scaled, b_i256);
+        
+        // Compute e^((q_i - max_q) / b)
+        let exp_val = i256::exp(exponent);
+        let exp_u256 = i256::to_u256(exp_val);
+        
+        // Convert back to Fixed18 scale
+        let exp_fixed = u256::mul_div_down(exp_u256, ONE, I256_SCALE);
+        sum_exp = sum_exp + exp_fixed;
+        
+        i = i + 1;
+    };
+    
+    // Compute ln(sum_exp)
+    // Convert sum_exp to i256 scale for ln calculation
+    let sum_scaled = u256::mul_div_down(sum_exp, I256_SCALE, ONE);
+    let sum_i256 = i256::from_u256(sum_scaled);
+    let ln_sum = i256::ln(sum_i256);
+    
+    // Convert ln result back to Fixed18
+    let ln_sum_u256 = i256::to_u256(ln_sum);
+    let ln_sum_fixed = u256::mul_div_down(ln_sum_u256, ONE, I256_SCALE);
+    
+    // Compute b * ln(sum_exp)
+    let b_ln_sum = u256::mul_div_down(b_raw, ln_sum_fixed, ONE);
+    
+    // Final result: max_q + b * ln(sum_exp)
+    let result = max_q_raw + b_ln_sum;
+    fixed18::from_raw_u256(result)
+}
+
+// Helper function to find maximum value in vector
+fun find_max(quantities: &vector<Fixed18>): Fixed18 {
+    let len = quantities.length();
+    assert!(len > 0, 3);
+    
+    let mut max = quantities[0];
+    let mut i = 1;
+    
+    while (i < len) {
+        let current = quantities[i];
+        if (fixed18::gt(current, max)) {
+            max = current;
+        };
+        i = i + 1;
+    };
+    
+    max
+}
+
+// Alternative implementation that accepts raw u256 values (already in Fixed18 format)
+public fun lmsr_cost_raw(quantities: vector<u256>, b: u256): u256 {
+    let mut fixed_quantities = vector::empty<Fixed18>();
+    let len = quantities.length();
+    let mut i = 0;
+    
+    while (i < len) {
+        fixed_quantities.push_back(fixed18::from_raw_u256(quantities[i]));
+        i = i + 1;
+    };
+    
+    let result = lmsr_cost(fixed_quantities, fixed18::from_raw_u256(b));
+    fixed18::raw_value(result)
+}
+
+// Compute the price of outcome i given current quantities
+// Price_i = e^(q_i / b) / sum(e^(q_j / b) for all j)
+public fun lmsr_price(quantities: vector<Fixed18>, b: Fixed18, outcome_index: u64): Fixed18 {
+    let len = quantities.length();
+    assert!(outcome_index < len, 4);
+    assert!(!fixed18::is_zero(b), 5);
+    
+    // Use log-sum-exp trick here too
+    let max_q = find_max(&quantities);
+    let max_q_raw = fixed18::raw_value(max_q);
+    let b_raw = fixed18::raw_value(b);
+    
+    // Compute sum of e^((q_j - max) / b) and e^((q_i - max) / b)
+    let mut sum_exp = 0u256;
+    let mut exp_i = 0u256;
+    let mut j = 0;
+    
+    while (j < len) {
+        let q_j = quantities[j];
+        let q_j_raw = fixed18::raw_value(q_j);
+        
+        // Compute (q_j - max_q) / b
+        let diff = if (q_j_raw >= max_q_raw) {
+            i256::from_u256(0)
+        } else {
+            i256::negative_from_u256(max_q_raw - q_j_raw)
+        };
+        
+        // Scale and divide by b
+        let diff_scaled = if (i256::is_negative(diff)) {
+            let abs_val = i256::to_u256(i256::abs(diff));
+            let scaled = u256::mul_div_down(abs_val, I256_SCALE, ONE);
+            i256::negative_from_u256(scaled)
+        } else {
+            i256::from_u256(0)
+        };
+        
+        let b_scaled = u256::mul_div_down(b_raw, I256_SCALE, ONE);
+        let b_i256 = i256::from_u256(b_scaled);
+        let exponent = i256::div(diff_scaled, b_i256);
+        
+        // Compute e^((q_j - max_q) / b)
+        let exp_val = i256::exp(exponent);
+        let exp_u256 = i256::to_u256(exp_val);
+        let exp_fixed = u256::mul_div_down(exp_u256, ONE, I256_SCALE);
+        
+        sum_exp = sum_exp + exp_fixed;
+        
+        if (j == outcome_index) {
+            exp_i = exp_fixed;
+        };
+        
+        j = j + 1;
+    };
+    
+    // Price = exp_i / sum_exp
+    let price = u256::mul_div_down(exp_i, ONE, sum_exp);
+    fixed18::from_raw_u256(price)
+}

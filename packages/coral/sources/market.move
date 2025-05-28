@@ -3,7 +3,7 @@ module coral::market;
 use std::type_name;
 
 use sui::balance::{Self, Supply, Balance};
-use sui::coin::{Coin, CoinMetadata};
+use sui::coin::Coin;
 use sui::dynamic_field;
 use sui::clock::Clock;
 use sui::sui::SUI;
@@ -30,7 +30,6 @@ public struct MarketManagerCap has key {
 
 public struct MarketConfig has copy, store, drop {
     fee_bps: u64,
-    coin_decimals: u64,
     liquidity_param: u64,
 }
 
@@ -57,8 +56,7 @@ const ETooLittleRevenue: u64 = 10;
 const EMarketPaused: u64 = 11;
 
 const DEFAULT_FEE_BPS: u64 = 100;
-const DEFAULT_OUTCOME_DECIMALS: u64 = 9;
-const DEFAULT_LIQUIDITY_PARAM: u64 = 1000; 
+const DEFAULT_LIQUIDITY_PARAM: u64 = 10000000000; 
 
 public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID, clock: &Clock, ctx: &mut TxContext): (Market, MarketManagerCap) {
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
@@ -75,7 +73,7 @@ public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID
         config: MarketConfig {
             fee_bps: DEFAULT_FEE_BPS,
             liquidity_param: DEFAULT_LIQUIDITY_PARAM,
-            coin_decimals: DEFAULT_OUTCOME_DECIMALS,
+            // coin_decimals: DEFAULT_OUTCOME_DECIMALS,
         },
     };
 
@@ -157,22 +155,24 @@ public fun add_outcome_snapshot_data<T>(market: &Market, snapshot: &mut OutcomeS
     snapshot.add_outcome_snapshot_data(market.id.to_inner(), outcome, supply.0.supply_value());
 }
 
-public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, metadata: &CoinMetadata<SUI>, payment: Coin<SUI>, outcome: Outcome, amount: u64, max_cost: u64, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
+public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, payment: Coin<SUI>, outcome: Outcome, amount: u64, max_cost: u64, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
     assert!(amount > 0, EZeroAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
-    let cost = snapshot.net_cost(outcome, market.id.to_inner(), market.config.liquidity_param, amount);
-    assert!(cost.lte(fixed18::from_u64(max_cost)), ETooMuchCost);
-    assert!(cost.lte(fixed18::from_u64(payment.value())), EInsufficientPayment);
-    deposit_internal<T>(market, amount, cost.to_u64(metadata.get_decimals()), payment, ctx)
+    let liquidity_param = fixed18::from_raw_u64(market.config.liquidity_param);
+    let cost = snapshot.net_cost(outcome, market.id.to_inner(), liquidity_param, fixed18::from_raw_u64(amount));
+    assert!(cost.lte(fixed18::from_raw_u64(max_cost)), ETooMuchCost);
+    assert!(cost.lte(fixed18::from_raw_u64(payment.value())), EInsufficientPayment);
+    deposit_internal<T>(market, amount, cost.to_u64(9), payment, ctx)
 }
 
 public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, coin: Coin<T>, outcome: Outcome, min_revenue: u64, ctx: &mut TxContext): Coin<SUI> {
     assert!(coin.value() > 0, EZeroAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
-    let revenue = snapshot.net_revenue(outcome, market.id.to_inner(), market.config.liquidity_param, coin.value());
-    assert!(revenue.gte(fixed18::from_u64(min_revenue)), ETooLittleRevenue);
+    let liquidity_param = fixed18::from_raw_u64(market.config.liquidity_param);
+    let revenue = snapshot.net_revenue(outcome, market.id.to_inner(), liquidity_param, fixed18::from_raw_u64(coin.value()));
+    assert!(revenue.gte(fixed18::from_raw_u64(min_revenue)), ETooLittleRevenue);
     withdraw_internal<T>(market, revenue.to_u64(9), coin, ctx)
 }
 
@@ -242,5 +242,27 @@ public fun market_balances_mut<T>(market: &mut Market): &mut MarketBalances<T> {
 }
 
 public fun calculate_fee(market: &Market, amount: u64): u64 {
-    fixed18::from_u64(amount).mul_down(fixed18::from_u64(market.config.fee_bps)).to_u64(9)
+    fixed18::from_raw_u64(amount).mul_down(fixed18::from_raw_u64(market.config.fee_bps)).to_u64(1)
+}
+
+public fun preview_buy_cost<T>(market: &Market, snapshot: &OutcomeSnapshot, outcome: Outcome, amount: u64): u64 {
+    assert!(amount > 0, EZeroAmount);
+    assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
+
+    let cloned = snapshot.clone_outcome_snapshot();
+    let liquidity_param = fixed18::from_raw_u64(market.config.liquidity_param);
+    cloned.net_cost(outcome, market.id.to_inner(), liquidity_param, fixed18::from_raw_u64(amount)).to_u64(9)
+}
+
+
+#[test_only]
+public fun destroy_market_for_testing(market: Market) {
+    let Market { id, blob_id: _, is_paused: _, created_at_ms: _, config: _, outcomes: _, resolved_at_ms: _, winning_outcome: _ } = market;
+    id.delete();
+}
+
+#[test_only]
+public fun destroy_cap_for_testing(cap: MarketManagerCap) {
+    let MarketManagerCap { id, market_id: _ } = cap;
+    id.delete();
 }

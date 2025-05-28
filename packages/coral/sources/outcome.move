@@ -43,6 +43,13 @@ public(package) fun create_outcome_snapshot(market_id: ID): OutcomeSnapshot {
     }
 }
 
+public(package) fun clone_outcome_snapshot(snapshot: &OutcomeSnapshot): OutcomeSnapshot {
+    OutcomeSnapshot {
+        data: snapshot.data,
+        market_id: snapshot.market_id,
+    }
+}
+
 public(package) fun add_outcome_snapshot_data(snapshot: &mut OutcomeSnapshot, market_id: ID, outcome: Outcome, supply: u64) {
     assert!(snapshot.market_id == market_id, EMarketIDSnapshotMismatch);
     assert!(!snapshot.data.contains(&outcome), EDuplicateOutcome);
@@ -50,7 +57,7 @@ public(package) fun add_outcome_snapshot_data(snapshot: &mut OutcomeSnapshot, ma
     snapshot.data.insert(outcome, supply);
 }
 
-fun destroy_snapshot_outcomes(snapshot: OutcomeSnapshot): (vector<Outcome>, vector<u64>) {
+public(package) fun destroy_snapshot_outcomes(snapshot: OutcomeSnapshot): (vector<Outcome>, vector<u64>) {
     let OutcomeSnapshot { market_id: _, data } = snapshot;
 
     let (outcomes, balances) = data.into_keys_values();
@@ -58,26 +65,24 @@ fun destroy_snapshot_outcomes(snapshot: OutcomeSnapshot): (vector<Outcome>, vect
     (outcomes, balances)
 }
 
-public(package) fun net_cost(snapshot: OutcomeSnapshot, outcome: Outcome, market_id: ID, liquidity_param: u64, amount: u64): Fixed18 {
+public(package) fun net_cost(snapshot: OutcomeSnapshot, outcome: Outcome, market_id: ID, liquidity_param: Fixed18, amount: Fixed18): Fixed18 {
     assert!(snapshot.market_id == market_id, EMarketIDSnapshotMismatch);
     let (outcomes, balances) = destroy_snapshot_outcomes(snapshot);
 
     let (has_outcome, outcome_index) = outcomes.index_of(&outcome);
-    assert!(has_outcome && outcome_index != 0, EInvalidOutcomeSnapshot);
+    assert!(has_outcome, EInvalidOutcomeSnapshot);
 
-    let liquidity_param = fixed18::from_u64(liquidity_param);
-    let outcome_amounts = balances.map!(|v| { fixed18::from_u64(v) });
-    lmsr::net_cost(outcome_amounts, liquidity_param, fixed18::from_u64(amount), outcome_index)
+    let outcome_amounts = balances.map!(|v| { fixed18::from_raw_u64(v) });
+    lmsr::net_cost(outcome_amounts, liquidity_param, amount, outcome_index)
 }
 
-public(package) fun net_revenue(snapshot: OutcomeSnapshot, outcome: Outcome, market_id: ID, liquidity_param: u64, amount: u64): Fixed18 {
+public(package) fun net_revenue(snapshot: OutcomeSnapshot, outcome: Outcome, market_id: ID, liquidity_param: Fixed18, amount: Fixed18): Fixed18 {
     assert!(snapshot.market_id == market_id, EMarketIDSnapshotMismatch);
     let (outcomes, balances) = destroy_snapshot_outcomes(snapshot);
     
     let (has_outcome, outcome_index) = outcomes.index_of(&outcome);
     assert!(has_outcome && outcome_index != 0, EInvalidOutcomeSnapshot);
 
-    let outcome_amounts = balances.map!(|v| { fixed18::from_u64(v) });
-    let liquidity_param = fixed18::from_u64(liquidity_param);
-    lmsr::net_revenue(outcome_amounts, liquidity_param, fixed18::from_u64(amount), outcome_index)
+    let outcome_amounts = balances.map!(|v| { fixed18::from_raw_u64(v) });
+    lmsr::net_revenue(outcome_amounts, liquidity_param, amount, outcome_index)
 }
