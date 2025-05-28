@@ -43,8 +43,10 @@ public(package) fun create_outcome_snapshot(market_id: ID): OutcomeSnapshot {
     }
 }
 
-public(package) fun add_outcome_snapshot_data(snapshot: &mut OutcomeSnapshot, outcome: Outcome, supply: u64) {
+public(package) fun add_outcome_snapshot_data(snapshot: &mut OutcomeSnapshot, market_id: ID, outcome: Outcome, supply: u64) {
+    assert!(snapshot.market_id == market_id, EMarketIDSnapshotMismatch);
     assert!(!snapshot.data.contains(&outcome), EDuplicateOutcome);
+    
     snapshot.data.insert(outcome, supply);
 }
 

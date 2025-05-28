@@ -169,16 +169,17 @@ public fun net_cost(mut outcomes: vector<Fixed18>, b: Fixed18, amount: Fixed18, 
     *outcome = (*outcome).add(amount);
 
     let final_cost = cost(outcomes, b);
-    return final_cost.sub(initial_cost)
+    assert!(final_cost.gte(initial_cost), ERR_UNDERFLOW);
+    final_cost.sub(initial_cost)
 }
 
 public fun net_revenue(mut outcomes: vector<Fixed18>, b: Fixed18, amount: Fixed18, outcome_index: u64): Fixed18 {
     let initial_cost = cost(outcomes, b);
 
     let outcome = &mut outcomes[outcome_index];
-    *outcome = (*outcome).sub(amount);
+    assert!((*outcome).gte(amount), ERR_UNDERFLOW);
 
-    let final_cost = cost(outcomes, b);
-    return initial_cost.sub(final_cost)
+    *outcome = (*outcome).sub(amount);
+    initial_cost.sub(cost(outcomes, b))
 }
 

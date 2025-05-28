@@ -15,6 +15,7 @@ use coral::outcome::{Self, Outcome, OutcomeSnapshot};
 public struct Market has key, store {
     id: UID,
     blob_id: ID,
+    is_paused: bool,
     created_at_ms: u64,
     config: MarketConfig,
     outcomes: vector<Outcome>,
@@ -45,15 +46,15 @@ public struct MarketBalancesKey<phantom T>() has copy, store, drop;
 
 const EUnAuthorizedMarketAccess: u64 = 1;
 const EOutcomeTypeMismatch: u64 = 2;
-const EMarketIDSnapshotMismatch: u64 = 3;
-const EInsufficientPayment: u64 = 4;
-const EZeroAmount: u64 = 5;
-const EMarketTypeMismatch: u64 = 6;
-const EDuplicateBlobID: u64 = 7;
-const EMarketResolved: u64 = 8;
-const EMarketNotResolved: u64 = 9;
-const ETooMuchCost: u64 = 10;
-const ETooLittleRevenue: u64 = 11;
+const EInsufficientPayment: u64 = 3;
+const EZeroAmount: u64 = 4;
+const EMarketTypeMismatch: u64 = 5;
+const EDuplicateBlobID: u64 = 6;
+const EMarketResolved: u64 = 7;
+const EMarketNotResolved: u64 = 8;
+const ETooMuchCost: u64 = 9;
+const ETooLittleRevenue: u64 = 10;
+const EMarketPaused: u64 = 11;
 
 const DEFAULT_FEE_BPS: u64 = 100;
 const DEFAULT_OUTCOME_DECIMALS: u64 = 9;
@@ -65,6 +66,7 @@ public fun create<SAFE: drop, RISKY: drop>(safe: SAFE, risky: RISKY, blob_id: ID
 
     let mut market = Market {
         blob_id,
+        is_paused: false,
         id: object::new(ctx),
         resolved_at_ms: option::none(),
         winning_outcome: option::none(),
@@ -119,6 +121,20 @@ public fun resolve_market(market: &mut Market, cap: &MarketManagerCap, outcome: 
     market.resolved_at_ms = option::some(clock.timestamp_ms());
 }
 
+public fun pause_market(market: &mut Market, cap: &MarketManagerCap) {
+    assert!(market.resolved_at_ms.is_none(), EMarketTypeMismatch);
+    assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+
+    market.is_paused = true;
+}
+
+public fun resume_market(market: &mut Market, cap: &MarketManagerCap) {
+    assert!(market.resolved_at_ms.is_none(), EMarketTypeMismatch);
+    assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+
+    market.is_paused = false;
+}
+
 public fun close_market(market: &mut Market, cap: &MarketManagerCap) {
     assert!(market.resolved_at_ms.is_some(), EMarketTypeMismatch);
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
@@ -127,16 +143,18 @@ public fun close_market(market: &mut Market, cap: &MarketManagerCap) {
 }
 
 public fun initialize_outcome_snapshot(market: &Market): OutcomeSnapshot {
+    assert!(!market.is_paused, EMarketPaused);
     assert!(market.resolved_at_ms.is_none(), EMarketResolved);
+    assert!(market.winning_outcome.is_none(), EMarketResolved);
+
     outcome::create_outcome_snapshot(market.id.to_inner())
 }
 
 public fun add_outcome_snapshot_data<T>(market: &Market, snapshot: &mut OutcomeSnapshot, outcome: Outcome) {
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
-    assert!(market.id.to_inner() == market.id.to_inner(), EMarketIDSnapshotMismatch);
 
     let supply = market.outcome_supply<T>();
-    snapshot.add_outcome_snapshot_data(outcome, supply.0.supply_value());
+    snapshot.add_outcome_snapshot_data(market.id.to_inner(), outcome, supply.0.supply_value());
 }
 
 public fun buy_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, metadata: &CoinMetadata<SUI>, payment: Coin<SUI>, outcome: Outcome, amount: u64, max_cost: u64, ctx: &mut TxContext): (Coin<T>, Coin<SUI>) {
@@ -159,6 +177,8 @@ public fun sell_outcome<T>(market: &mut Market, snapshot: OutcomeSnapshot, coin:
 }
 
 public fun redeem<T>(market: &mut Market, coin: Coin<T>, ctx: &mut TxContext): Coin<SUI> {
+    assert!(coin.value() > 0, EZeroAmount);
+    assert!(market.is_paused, EMarketPaused);
     assert!(market.resolved_at_ms.is_some(), EMarketNotResolved);
     market.winning_outcome.do!(|outcome| {
         assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
