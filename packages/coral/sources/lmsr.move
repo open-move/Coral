@@ -4,65 +4,39 @@ use interest_math::fixed18::{Self, Fixed18};
 use interest_math::i256;
 use interest_math::u256;
 
-const ERR_UNDERFLOW: u64 = 1;
+const EZeroBValue: u64 = 1; 
+const EUnderflow: u64 = 2;
+const EQuantityIndexOutOfBounds: u64 = 3;
 
 // Constants
 const ONE: u256 = 1_000_000_000_000_000_000; // 1e18
 const I256_SCALE: u256 = 79228162514264337593543950336; // 2^96
 
-public fun net_cost(mut outcomes: vector<Fixed18>, b: Fixed18, amount: Fixed18, outcome_index: u64): Fixed18 {
-    let initial_cost = lmsr_cost(outcomes, b);
-
-    let outcome = &mut outcomes[outcome_index];
-    *outcome = (*outcome).add(amount);
-
-    let final_cost = lmsr_cost(outcomes, b);
-    assert!(final_cost.gte(initial_cost), ERR_UNDERFLOW);
-    final_cost.sub(initial_cost)
-}
-
-public fun net_revenue(mut outcomes: vector<Fixed18>, b: Fixed18, amount: Fixed18, outcome_index: u64): Fixed18 {
-    let initial_cost = lmsr_cost(outcomes, b);
-
-    let outcome = &mut outcomes[outcome_index];
-    assert!((*outcome).gte(amount), ERR_UNDERFLOW);
-
-    *outcome = (*outcome).sub(amount);
-    initial_cost.sub(lmsr_cost(outcomes, b))
-}
-
 
 // Numerically stable LMSR cost function using log-sum-exp trick
 // Cost(q) = m + b × ln(sum of e^((q_i - m) / b))
 // where m = max(q_i)
-public fun lmsr_cost(quantities: vector<Fixed18>, b: Fixed18): Fixed18 {
-    let len = quantities.length();
-    assert!(!fixed18::is_zero(b), 2);
+public fun cost(quantities: vector<Fixed18>, b: Fixed18): Fixed18 {
+    assert!(!fixed18::is_zero(b), EZeroBValue);
     
-
-    let max_q = find_max(&quantities);
+    let max_q = find_max(quantities);
     let b_raw = fixed18::raw_value(b);
     let max_q_raw = fixed18::raw_value(max_q);
     
     // Compute sum of e^((q_i - max) / b)
-    let  (mut sum_exp, mut i) = (0u256, 0);
-    while (i < len) {
-        let q_i = quantities[i];
+    let mut sum_exp = 0u256;
+    quantities.do!(|q_i| {
         let q_i_raw = fixed18::raw_value(q_i);
         
-        // Compute (q_i - max_q) / b
-        // This will be negative or zero, so we need signed arithmetic
         let diff = if (q_i_raw >= max_q_raw) {
-            // Should only be equal, not greater
             i256::from_u256(0)
         } else {
-            // q_i < max_q, so this is negative
             i256::negative_from_u256(max_q_raw - q_i_raw)
         };
         
         // Scale to i256 format (2^96 scaling)
-        let diff_scaled = if (i256::is_negative(diff)) {
-            let abs_val = i256::to_u256(i256::abs(diff));
+        let diff_scaled = if (diff.is_negative()) {
+            let abs_val = i256::to_u256(diff.abs());
             let scaled = u256::mul_div_down(abs_val, I256_SCALE, ONE);
             i256::negative_from_u256(scaled)
         } else {
@@ -81,9 +55,7 @@ public fun lmsr_cost(quantities: vector<Fixed18>, b: Fixed18): Fixed18 {
         // Convert back to Fixed18 scale
         let exp_fixed = u256::mul_div_down(exp_u256, ONE, I256_SCALE);
         sum_exp = sum_exp + exp_fixed;
-        
-        i = i + 1;
-    };
+    });
     
     // Compute ln(sum_exp)
     // Convert sum_exp to i256 scale for ln calculation
@@ -103,27 +75,19 @@ public fun lmsr_cost(quantities: vector<Fixed18>, b: Fixed18): Fixed18 {
     fixed18::from_raw_u256(result)
 }
 
-// Helper function to find maximum value in vector
-fun find_max(quantities: &vector<Fixed18>): Fixed18 {
-    let len = quantities.length();
-    assert!(len > 0, 3);
-    
+fun find_max(quantities: vector<Fixed18>): Fixed18 {
     let mut max = quantities[0];
-    let mut i = 1;
-    
-    while (i < len) {
-        let current = quantities[i];
-        if (fixed18::gt(current, max)) {
-            max = current;
-        };
-        i = i + 1;
-    };
+    quantities.do!(|val| {
+        if (val.gt(max)) { 
+            max = val 
+        }
+    });
     
     max
 }
 
 // Alternative implementation that accepts raw u256 values (already in Fixed18 format)
-public fun lmsr_cost_raw(quantities: vector<u256>, b: u256): u256 {
+public fun cost_raw(quantities: vector<u256>, b: u256): u256 {
     let mut fixed_quantities = vector::empty<Fixed18>();
     let len = quantities.length();
     let mut i = 0;
@@ -133,28 +97,25 @@ public fun lmsr_cost_raw(quantities: vector<u256>, b: u256): u256 {
         i = i + 1;
     };
     
-    let result = lmsr_cost(fixed_quantities, fixed18::from_raw_u256(b));
+    let result = cost(fixed_quantities, fixed18::from_raw_u256(b));
     fixed18::raw_value(result)
 }
 
-// Compute the price of outcome i given current quantities
+// Compute the price of quantity i given current quantities
 // Price_i = e^(q_i / b) / sum(e^(q_j / b) for all j)
-public fun lmsr_price(quantities: vector<Fixed18>, b: Fixed18, outcome_index: u64): Fixed18 {
-    let len = quantities.length();
-    assert!(outcome_index < len, 4);
-    assert!(!fixed18::is_zero(b), 5);
+public fun lmsr_price(quantities: vector<Fixed18>, b: Fixed18, quantity_index: u64): Fixed18 {
+    assert!(quantity_index < quantities.length(), EQuantityIndexOutOfBounds);
+    assert!(!fixed18::is_zero(b), EZeroBValue);
     
     // Use log-sum-exp trick here too
-    let max_q = find_max(&quantities);
-    let max_q_raw = fixed18::raw_value(max_q);
+    let max_q = find_max(quantities);
     let b_raw = fixed18::raw_value(b);
+    let max_q_raw = fixed18::raw_value(max_q);
     
     // Compute sum of e^((q_j - max) / b) and e^((q_i - max) / b)
-    let mut sum_exp = 0u256;
     let mut exp_i = 0u256;
-    let mut j = 0;
-    
-    while (j < len) {
+    let mut sum_exp = 0u256;
+    quantities.length().do!(|j| {
         let q_j = quantities[j];
         let q_j_raw = fixed18::raw_value(q_j);
         
@@ -185,14 +146,33 @@ public fun lmsr_price(quantities: vector<Fixed18>, b: Fixed18, outcome_index: u6
         
         sum_exp = sum_exp + exp_fixed;
         
-        if (j == outcome_index) {
+        if (j == quantity_index) {
             exp_i = exp_fixed;
         };
-        
-        j = j + 1;
-    };
+    });
     
     // Price = exp_i / sum_exp
     let price = u256::mul_div_down(exp_i, ONE, sum_exp);
     fixed18::from_raw_u256(price)
+}
+
+public fun net_cost(mut quantitys: vector<Fixed18>, b: Fixed18, amount: Fixed18, quantity_index: u64): Fixed18 {
+    let initial_cost = cost(quantitys, b);
+
+    let quantity = &mut quantitys[quantity_index];
+    *quantity = (*quantity).add(amount);
+
+    let final_cost = cost(quantitys, b);
+    assert!(final_cost.gte(initial_cost), EUnderflow);
+    final_cost.sub(initial_cost)
+}
+
+public fun net_revenue(mut quantitys: vector<Fixed18>, b: Fixed18, amount: Fixed18, quantity_index: u64): Fixed18 {
+    let initial_cost = cost(quantitys, b);
+
+    let quantity = &mut quantitys[quantity_index];
+    assert!((*quantity).gte(amount), EUnderflow);
+
+    *quantity = (*quantity).sub(amount);
+    initial_cost.sub(cost(quantitys, b))
 }
