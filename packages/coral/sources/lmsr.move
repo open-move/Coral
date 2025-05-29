@@ -156,23 +156,23 @@ public fun lmsr_price(quantities: vector<Fixed18>, b: Fixed18, quantity_index: u
     fixed18::from_raw_u256(price)
 }
 
-public fun net_cost(mut quantitys: vector<Fixed18>, b: Fixed18, amount: Fixed18, quantity_index: u64): Fixed18 {
-    let initial_cost = cost(quantitys, b);
+public fun net_cost(mut quantities: vector<Fixed18>, b: Fixed18, amount: Fixed18, quantity_index: u64): Fixed18 {
+    let initial_cost = cost(quantities, b);
 
-    let quantity = &mut quantitys[quantity_index];
+    let quantity = &mut quantities[quantity_index];
     *quantity = (*quantity).add(amount);
 
-    let final_cost = cost(quantitys, b);
+    let final_cost = cost(quantities, b);
     assert!(final_cost.gte(initial_cost), EUnderflow);
     final_cost.sub(initial_cost)
 }
 
-public fun net_revenue(mut quantitys: vector<Fixed18>, b: Fixed18, amount: Fixed18, quantity_index: u64): Fixed18 {
-    let initial_cost = cost(quantitys, b);
+public fun net_revenue(mut quantities: vector<Fixed18>, b: Fixed18, amount: Fixed18, quantity_index: u64): Fixed18 {
+    let initial_cost = cost(quantities, b);
 
-    let quantity = &mut quantitys[quantity_index];
+    let quantity = &mut quantities[quantity_index];
     assert!((*quantity).gte(amount), EUnderflow);
 
     *quantity = (*quantity).sub(amount);
-    initial_cost.sub(cost(quantitys, b))
+    initial_cost.sub(cost(quantities, b))
 }

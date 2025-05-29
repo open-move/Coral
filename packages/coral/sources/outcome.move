@@ -72,7 +72,7 @@ public(package) fun net_cost(snapshot: OutcomeSnapshot, outcome: Outcome, market
     let (has_outcome, outcome_index) = outcomes.index_of(&outcome);
     assert!(has_outcome, EInvalidOutcomeSnapshot);
 
-    let outcome_amounts = balances.map!(|v| { fixed18::from_raw_u64(v) });
+    let outcome_amounts = balances.map!(|v| { fixed18::from_u64(v) });
     lmsr::net_cost(outcome_amounts, liquidity_param, amount, outcome_index)
 }
 
@@ -81,8 +81,8 @@ public(package) fun net_revenue(snapshot: OutcomeSnapshot, outcome: Outcome, mar
     let (outcomes, balances) = destroy_snapshot_outcomes(snapshot);
     
     let (has_outcome, outcome_index) = outcomes.index_of(&outcome);
-    assert!(has_outcome && outcome_index != 0, EInvalidOutcomeSnapshot);
+    assert!(has_outcome, EInvalidOutcomeSnapshot);
 
-    let outcome_amounts = balances.map!(|v| { fixed18::from_raw_u64(v) });
+    let outcome_amounts = balances.map!(|v| { fixed18::from_u64(v) });
     lmsr::net_revenue(outcome_amounts, liquidity_param, amount, outcome_index)
 }
