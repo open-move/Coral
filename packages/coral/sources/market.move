@@ -6,6 +6,7 @@ use sui::balance::{Self, Supply, Balance};
 use sui::coin::{CoinMetadata, Coin};
 use sui::dynamic_field;
 use sui::clock::Clock;
+use sui::event;
 
 use interest_math::fixed18;
 
@@ -43,6 +44,89 @@ public struct OutcomeSupply<phantom T>(Supply<T>) has store;
 
 public struct OutcomeSupplyKey<phantom T>() has copy, store, drop;
 public struct MarketBalancesKey<phantom T>() has copy, store, drop;
+
+// === Events ===
+
+public struct MarketCreated has copy, drop {
+    market_id: ID,
+    blob_id: ID,
+    coin_type: TypeName,
+    coin_decimals: u8,
+    created_at_ms: u64,
+    fee_bps: u64,
+    liquidity_param: u64,
+    outcomes: vector<Outcome>
+}
+
+public struct OutcomePurchased has copy, drop {
+    market_id: ID,
+    buyer: address,
+    outcome: Outcome,
+    amount: u64,
+    cost: u64,
+    fee: u64,
+    timestamp_ms: u64
+}
+
+public struct OutcomeSold has copy, drop {
+    market_id: ID,
+    seller: address,
+    outcome: Outcome,
+    amount: u64,
+    revenue: u64,
+    timestamp_ms: u64
+}
+
+public struct OutcomeRedeemed has copy, drop {
+    market_id: ID,
+    redeemer: address,
+    outcome: Outcome,
+    amount: u64,
+    payout: u64,
+    timestamp_ms: u64
+}
+
+public struct MarketResolved has copy, drop {
+    market_id: ID,
+    winning_outcome: Outcome,
+    resolved_at_ms: u64
+}
+
+public struct MarketPaused has copy, drop {
+    market_id: ID,
+    timestamp_ms: u64
+}
+
+public struct MarketResumed has copy, drop {
+    market_id: ID,
+    timestamp_ms: u64
+}
+
+public struct MarketClosed has copy, drop {
+    market_id: ID,
+    timestamp_ms: u64
+}
+
+public struct MarketConfigUpdated has copy, drop {
+    market_id: ID,
+    old_fee_bps: u64,
+    new_fee_bps: u64,
+    timestamp_ms: u64
+}
+
+public struct BlobIdUpdated has copy, drop {
+    market_id: ID,
+    old_blob_id: ID,
+    new_blob_id: ID,
+    timestamp_ms: u64
+}
+
+public struct FeesWithdrawn has copy, drop {
+    market_id: ID,
+    amount: u64,
+    recipient: address,
+    timestamp_ms: u64
+}
 
 const EUnAuthorizedMarketAccess: u64 = 1;
 const EOutcomeTypeMismatch: u64 = 2;
@@ -90,6 +174,18 @@ public fun create<SAFE: drop, RISKY: drop, C>(safe: SAFE, risky: RISKY, metadata
     });
 
     let market_id = market.id.to_inner();
+    
+    event::emit(MarketCreated {
+        market_id,
+        blob_id,
+        coin_type: type_name::get<C>(),
+        coin_decimals: metadata.get_decimals(),
+        created_at_ms: clock.timestamp_ms(),
+        fee_bps: DEFAULT_FEE_BPS,
+        liquidity_param: DEFAULT_LIQUIDITY_PARAM,
+        outcomes: vector[safe_outcome, risky_outcome]
+    });
+    
     (market, MarketManagerCap { id: object::new(ctx), market_id })
 }
 
@@ -97,19 +193,35 @@ public fun transfer_cap(cap: MarketManagerCap, recipient: address) {
     transfer::transfer(cap, recipient)
 }
 
-public fun update_blob_id(market: &mut Market, cap: &MarketManagerCap, blob_id: ID) {
+public fun update_blob_id(market: &mut Market, cap: &MarketManagerCap, blob_id: ID, clock: &Clock) {
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
     assert!(market.blob_id != blob_id, EDuplicateBlobID);
 
+    let old_blob_id = market.blob_id;
     market.blob_id = blob_id;
+    
+    event::emit(BlobIdUpdated {
+        market_id: market.id.to_inner(),
+        old_blob_id,
+        new_blob_id: blob_id,
+        timestamp_ms: clock.timestamp_ms()
+    });
 }
 
-public fun update_market_fee_bps(market: &mut Market, cap: &MarketManagerCap, fee_bps: u64) {
+public fun update_market_fee_bps(market: &mut Market, cap: &MarketManagerCap, fee_bps: u64, clock: &Clock) {
     assert!(market.resolved_at_ms.is_none(), EMarketResolved);
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
 
     assert!(fee_bps <= 1000, EInvalidFeeValue);
+    let old_fee_bps = market.config.fee_bps;
     market.config.fee_bps = fee_bps;
+    
+    event::emit(MarketConfigUpdated {
+        market_id: market.id.to_inner(),
+        old_fee_bps,
+        new_fee_bps: fee_bps,
+        timestamp_ms: clock.timestamp_ms()
+    });
 }
 
 public fun resolve_market(market: &mut Market, cap: &MarketManagerCap, outcome: Outcome, clock: &Clock) {
@@ -117,29 +229,57 @@ public fun resolve_market(market: &mut Market, cap: &MarketManagerCap, outcome: 
     assert!(market.outcomes.contains(&outcome), EOutcomeTypeMismatch);
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
 
+    let timestamp = clock.timestamp_ms();
     market.winning_outcome = option::some(outcome);
-    market.resolved_at_ms = option::some(clock.timestamp_ms());
+    market.resolved_at_ms = option::some(timestamp);
+    
+    event::emit(MarketResolved {
+        market_id: market.id.to_inner(),
+        winning_outcome: outcome,
+        resolved_at_ms: timestamp
+    });
 }
 
-public fun pause_market(market: &mut Market, cap: &MarketManagerCap) {
+public fun pause_market(market: &mut Market, cap: &MarketManagerCap, clock: &Clock) {
     assert!(market.resolved_at_ms.is_none(), EMarketResolved);
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
 
     market.is_paused = true;
+    
+    event::emit(MarketPaused {
+        market_id: market.id.to_inner(),
+        timestamp_ms: clock.timestamp_ms()
+    });
 }
 
-public fun resume_market(market: &mut Market, cap: &MarketManagerCap) {
+public fun resume_market(market: &mut Market, cap: &MarketManagerCap, clock: &Clock) {
     assert!(market.resolved_at_ms.is_none(), EMarketResolved);
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
 
     market.is_paused = false;
+    
+    event::emit(MarketResumed {
+        market_id: market.id.to_inner(),
+        timestamp_ms: clock.timestamp_ms()
+    });
 }
 
-public fun close_market(market: &mut Market, cap: &MarketManagerCap) {
-    assert!(market.resolved_at_ms.is_some(), EMarketResolved);
+public fun close_market(market: Market, cap: MarketManagerCap, clock: &Clock) {
+    assert!(market.resolved_at_ms.is_some(), EMarketNotResolved);
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
 
-    abort 0
+    let market_id = market.id.to_inner();
+    
+    event::emit(MarketClosed {
+        market_id,
+        timestamp_ms: clock.timestamp_ms()
+    });
+    
+    let Market { id, .. } = market;
+    let MarketManagerCap { id: cap_id, .. } = cap;
+    
+    id.delete();
+    cap_id.delete();
 }
 
 public fun initialize_outcome_snapshot(market: &Market): OutcomeSnapshot {
@@ -157,7 +297,7 @@ public fun add_outcome_snapshot_data<T>(market: &Market, snapshot: &mut OutcomeS
     snapshot.add_outcome_snapshot_data(market.id.to_inner(), outcome, supply.0.supply_value());
 }
 
-public fun buy_outcome<T, C>(market: &mut Market, snapshot: OutcomeSnapshot, payment: Coin<C>, outcome: Outcome, amount: u64, max_cost: u64, ctx: &mut TxContext): (Coin<T>, Coin<C>) {
+public fun buy_outcome<T, C>(market: &mut Market, snapshot: OutcomeSnapshot, payment: Coin<C>, outcome: Outcome, amount: u64, max_cost: u64, clock: &Clock, ctx: &mut TxContext): (Coin<T>, Coin<C>) {
     assert!(amount > 0, EZeroAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
@@ -166,35 +306,81 @@ public fun buy_outcome<T, C>(market: &mut Market, snapshot: OutcomeSnapshot, pay
     assert!(cost.lte(fixed18::from_u64(max_cost)), ETooMuchCost);
     assert!(cost.lte(fixed18::from_u64(payment.value())), EInsufficientPayment);
 
-    deposit_internal<T, C>(market, amount, cost.to_u64(0), payment, ctx)
+    let cost_u64 = cost.to_u64(0);
+    let fee = market.calculate_fee(cost_u64);
+    
+    event::emit(OutcomePurchased {
+        fee,
+        amount,
+        outcome,
+        cost: cost_u64,
+        buyer: ctx.sender(),
+        market_id: market.id.to_inner(),
+        timestamp_ms: clock.timestamp_ms()
+    });
+
+    deposit_internal<T, C>(market, amount, cost_u64, payment, ctx)
 }
 
-public fun sell_outcome<T, C>(market: &mut Market, snapshot: OutcomeSnapshot, coin: Coin<T>, outcome: Outcome, min_revenue: u64, ctx: &mut TxContext): Coin<C> {
+public fun sell_outcome<T, C>(market: &mut Market, snapshot: OutcomeSnapshot, coin: Coin<T>, outcome: Outcome, min_revenue: u64, clock: &Clock, ctx: &mut TxContext): Coin<C> {
     assert!(coin.value() > 0, EZeroAmount);
     assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
 
+    let amount = coin.value();
     let liquidity_param = fixed18::from_u64(market.config.liquidity_param);
-    let revenue = snapshot.net_revenue(outcome, market.id.to_inner(), liquidity_param, fixed18::from_u64(coin.value()));
+    let revenue = snapshot.net_revenue(outcome, market.id.to_inner(), liquidity_param, fixed18::from_u64(amount));
   
     assert!(revenue.gte(fixed18::from_u64(min_revenue)), ETooLittleRevenue);
-    withdraw_internal<T, C>(market, revenue.to_u64(0), coin, ctx)
+    let revenue_u64 = revenue.to_u64(0);
+    
+    event::emit(OutcomeSold {
+        market_id: market.id.to_inner(),
+        seller: ctx.sender(),
+        outcome,
+        amount,
+        revenue: revenue_u64,
+        timestamp_ms: clock.timestamp_ms()
+    });
+    
+    withdraw_internal<T, C>(market, revenue_u64, coin, ctx)
 }
 
-public fun redeem<T, C>(market: &mut Market, coin: Coin<T>, ctx: &mut TxContext): Coin<C> {
+public fun redeem<T, C>(market: &mut Market, coin: Coin<T>, clock: &Clock, ctx: &mut TxContext): Coin<C> {
     assert!(coin.value() > 0, EZeroAmount);
     assert!(market.is_paused, EMarketPaused);
     assert!(market.resolved_at_ms.is_some(), EMarketNotResolved);
+    
+    let amount = coin.value();
+    let mut winning_outcome = outcome::safe(type_name::get<T>()); // Default, will be overwritten
+    
     market.winning_outcome.do!(|outcome| {
         assert!(type_name::get<T>() == outcome.get_type(), EOutcomeTypeMismatch);
+        winning_outcome = outcome;
     });
 
-    withdraw_internal<T, C>(market, coin.value(), coin, ctx)
+    event::emit(OutcomeRedeemed {
+        market_id: market.id.to_inner(),
+        redeemer: ctx.sender(),
+        outcome: winning_outcome,
+        amount,
+        payout: amount, // 1:1 redemption for winning outcome
+        timestamp_ms: clock.timestamp_ms()
+    });
+
+    withdraw_internal<T, C>(market, amount, coin, ctx)
 }
 
-public fun withdraw_fee<C>(market: &mut Market, cap: &MarketManagerCap, amount: u64, ctx: &mut TxContext): Coin<C> {
+public fun withdraw_fee<C>(market: &mut Market, cap: &MarketManagerCap, amount: u64, clock: &Clock, ctx: &mut TxContext): Coin<C> {
     assert!(amount > 0, EZeroAmount);
     assert!(market.resolved_at_ms.is_some(), EMarketNotResolved);
     assert!(market.id.to_inner() == cap.market_id, EUnAuthorizedMarketAccess);
+
+    event::emit(FeesWithdrawn {
+        market_id: market.id.to_inner(),
+        amount,
+        recipient: ctx.sender(),
+        timestamp_ms: clock.timestamp_ms()
+    });
 
     let market_balances_mut = market_balances_mut<C>(market);
     market_balances_mut.fee_balance.split(amount).into_coin(ctx)

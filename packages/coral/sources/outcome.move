@@ -1,6 +1,7 @@
 module coral::outcome;
 
 use std::type_name::TypeName;
+
 use sui::vec_map::{Self, VecMap};
 
 use interest_math::fixed18::{Self, Fixed18};

@@ -78,7 +78,7 @@ fun test_update_blob_id() {
     let (mut market, cap) = create_market(&mut test);
     
     let new_blob_id = object::id_from_address(@0xDEADBEEF);
-    market.update_blob_id(&cap, new_blob_id);
+    market.update_blob_id(&cap, new_blob_id, &test.clock);
     
     market.destroy_market_for_testing();
     cap.destroy_cap_for_testing();
@@ -91,7 +91,7 @@ fun test_update_blob_id_duplicate_fails() {
     let (mut market, cap) = create_market(&mut test);
     
     let blob_id = object::id_from_address(BLOB_ID);
-    market.update_blob_id(&cap, blob_id);
+    market.update_blob_id(&cap, blob_id, &test.clock);
 
     market.destroy_market_for_testing();
     cap.destroy_cap_for_testing();
@@ -103,7 +103,7 @@ fun test_update_market_fee_bps() {
     let mut test = start_test(MANAGER);
     let (mut market, cap) = create_market(&mut test);
     
-    market.update_market_fee_bps(&cap, 500);
+    market.update_market_fee_bps(&cap, 500, &test.clock);
     
     market.destroy_market_for_testing();
     cap.destroy_cap_for_testing();
@@ -115,7 +115,7 @@ fun test_update_fee_too_high_fails() {
     let mut test = start_test(MANAGER);
     let (mut market, cap) = create_market(&mut test);
     
-    market.update_market_fee_bps(&cap, 1001);
+    market.update_market_fee_bps(&cap, 1001, &test.clock);
 
     market.destroy_market_for_testing();
     cap.destroy_cap_for_testing();
@@ -145,6 +145,7 @@ fun test_buy_safe_outcome() {
         safe_outcome,
         safe_amount,
         previewed_cost,
+        &test.clock,
         test.scenario.ctx()
     );
 
@@ -181,6 +182,7 @@ fun test_buy_risky_outcome() {
         risky_outcome,
         risky_amount,
         previewed_cost,
+        &test.clock,
         test.scenario.ctx()
     );
 
@@ -217,6 +219,7 @@ fun test_sell_outcome() {
         safe_outcome,
         safe_amount,
         previewed_cost,
+        &test.clock,
         test.scenario.ctx()
     );
 
@@ -225,7 +228,7 @@ fun test_sell_outcome() {
     market.add_outcome_snapshot_data<SAFE>(&mut snapshot, safe_outcome);
     market.add_outcome_snapshot_data<RISKY>(&mut snapshot, risky_outcome);
 
-    let tusd_coin = market.sell_outcome<SAFE, TUSD>(snapshot, safe_coin, safe_outcome, min_revenue, test.scenario.ctx());
+    let tusd_coin = market.sell_outcome<SAFE, TUSD>(snapshot, safe_coin, safe_outcome, min_revenue, &test.clock, test.scenario.ctx());
 
     tusd_coin.burn_for_testing();
     change.burn_for_testing();
@@ -252,8 +255,8 @@ fun test_pause_and_resume_market() {
     let mut test = start_test(MANAGER);
     let (mut market, cap) = create_market(&mut test);
     
-    market.pause_market(&cap);
-    market.resume_market(&cap);
+    market.pause_market(&cap, &test.clock);
+    market.resume_market(&cap, &test.clock);
     
     cap.destroy_cap_for_testing();
     market.destroy_market_for_testing();
@@ -265,7 +268,7 @@ fun test_buy_when_paused_fails() {
     let mut test = start_test(MANAGER);
     let (mut market, cap) = create_market(&mut test);
     
-    market.pause_market(&cap);
+    market.pause_market(&cap, &test.clock);
     let _snapshot = market.initialize_outcome_snapshot();
     abort
 }
@@ -282,7 +285,7 @@ fun test_buy_zero_amount_fails() {
     market.add_outcome_snapshot_data<RISKY>(&mut snapshot, outcome::risky(type_name::get<RISKY>()));
 
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
-    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, 0, 100, test.scenario.ctx());
+    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, 0, 100, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -298,7 +301,7 @@ fun test_sell_zero_amount_fails() {
     market.add_outcome_snapshot_data<RISKY>(&mut snapshot, outcome::risky(type_name::get<RISKY>()));
 
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
-    let _sui_coin = market.sell_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, 0, test.scenario.ctx());
+    let _sui_coin = market.sell_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, 0, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -315,7 +318,7 @@ fun test_buy_wrong_outcome_type_fails() {
 
     let risky_outcome = outcome::risky(type_name::get<RISKY>());
     let amount = 10 * 10u64.pow(TUSD_DECIMALS);
-    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, risky_outcome, amount, 100, test.scenario.ctx());
+    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, risky_outcome, amount, 100, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -336,7 +339,7 @@ fun test_buy_exceeds_max_cost_fails() {
     let previewed_cost = market.preview_buy_cost<SAFE>(&snapshot, safe_outcome, amount);
     let fee = market.calculate_fee(previewed_cost);
     let coin = mint_tusd(previewed_cost + fee, &mut test);
-    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, previewed_cost - 1, test.scenario.ctx());
+    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, previewed_cost - 1, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -357,7 +360,7 @@ fun test_buy_insufficient_payment_fails() {
     let previewed_cost = market.preview_buy_cost<SAFE>(&snapshot, safe_outcome, amount);
     // Provide less than the cost
     let coin = mint_tusd(previewed_cost - 1, &mut test);
-    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, previewed_cost, test.scenario.ctx());
+    let (_safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, previewed_cost, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -375,13 +378,13 @@ fun test_sell_below_min_revenue_fails() {
     let preview_cost = market.preview_buy_cost<SAFE>(&snapshot, safe_outcome, amount);
     let fee_amount = market.calculate_fee(preview_cost);
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
-    let (safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, test.scenario.ctx());
+    let (safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
 
     let mut sell_snapshot = market.initialize_outcome_snapshot();
     market.add_outcome_snapshot_data<SAFE>(&mut sell_snapshot, outcome::safe(type_name::get<SAFE>()));
     market.add_outcome_snapshot_data<RISKY>(&mut sell_snapshot, outcome::risky(type_name::get<RISKY>()));
     
-    let _sui_coin = market.sell_outcome<SAFE, TUSD>(sell_snapshot, safe_coin, safe_outcome, 1000 * 10u64.pow(TUSD_DECIMALS), test.scenario.ctx());
+    let _sui_coin = market.sell_outcome<SAFE, TUSD>(sell_snapshot, safe_coin, safe_outcome, 1000 * 10u64.pow(TUSD_DECIMALS), &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -406,7 +409,7 @@ fun test_update_fee_after_resolve_fails() {
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
     market.resolve_market(&cap, safe_outcome, &test.clock);
     
-    market.update_market_fee_bps(&cap, 200);
+    market.update_market_fee_bps(&cap, 200, &test.clock);
     abort
 }
 
@@ -418,7 +421,7 @@ fun test_pause_after_resolve_fails() {
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
     market.resolve_market(&cap, safe_outcome, &test.clock);
     
-    market.pause_market(&cap);
+    market.pause_market(&cap, &test.clock);
     abort
 }
 
@@ -428,7 +431,7 @@ fun test_unauthorized_cap_access_fails() {
     let (mut market1, _cap1) = create_market(&mut test);
     let (mut _market2, cap2) = create_market(&mut test);
     
-    market1.update_market_fee_bps(&cap2, 200);
+    market1.update_market_fee_bps(&cap2, 200, &test.clock);
     abort
 }
 
@@ -448,13 +451,13 @@ fun test_withdraw_fee() {
     
     // Mint enough for cost + fee
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
-    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, test.scenario.ctx());
+    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
 
     let risky_outcome = outcome::risky(type_name::get<RISKY>());
     market.resolve_market(&cap, risky_outcome, &test.clock);
     
     // Withdraw the fee that was collected
-    let fee_coin = market.withdraw_fee<TUSD>(&cap, fee_amount, test.scenario.ctx());
+    let fee_coin = market.withdraw_fee<TUSD>(&cap, fee_amount, &test.clock, test.scenario.ctx());
     
     assert!(fee_coin.value() == fee_amount);
     
@@ -471,7 +474,7 @@ fun test_withdraw_fee_before_resolve_fails() {
     let mut test = start_test(MANAGER);
     let (mut market, cap) = create_market(&mut test);
     
-    let _fee_coin = market.withdraw_fee<TUSD>(&cap, 100, test.scenario.ctx());
+    let _fee_coin = market.withdraw_fee<TUSD>(&cap, 100, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -489,13 +492,13 @@ fun test_large_buy_sell_cycle() {
     let preview_cost = market.preview_buy_cost<SAFE>(&snapshot, safe_outcome, amount);
     let fee_amount = market.calculate_fee(preview_cost);
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
-    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, test.scenario.ctx());
+    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
 
     let mut sell_snapshot = market.initialize_outcome_snapshot();
     market.add_outcome_snapshot_data<SAFE>(&mut sell_snapshot, outcome::safe(type_name::get<SAFE>()));
     market.add_outcome_snapshot_data<RISKY>(&mut sell_snapshot, outcome::risky(type_name::get<RISKY>()));
     
-    let sui_coin = market.sell_outcome<SAFE, TUSD>(sell_snapshot, safe_coin, safe_outcome, 0, test.scenario.ctx());
+    let sui_coin = market.sell_outcome<SAFE, TUSD>(sell_snapshot, safe_coin, safe_outcome, 0, &test.clock, test.scenario.ctx());
     
     assert!(sui_coin.value() <= preview_cost);
     
@@ -520,7 +523,7 @@ fun test_multiple_buys_different_outcomes() {
     let preview_cost1 = market.preview_buy_cost<SAFE>(&snapshot1, safe_outcome, amount1);
     let fee_amount1 = market.calculate_fee(preview_cost1);
     let coin1 = mint_tusd(preview_cost1 + fee_amount1, &mut test);
-    let (safe_coin, change1) = market.buy_outcome<SAFE, TUSD>(snapshot1, coin1, safe_outcome, amount1, preview_cost1, test.scenario.ctx());
+    let (safe_coin, change1) = market.buy_outcome<SAFE, TUSD>(snapshot1, coin1, safe_outcome, amount1, preview_cost1, &test.clock, test.scenario.ctx());
 
     let mut snapshot2 = market.initialize_outcome_snapshot();
     market.add_outcome_snapshot_data<SAFE>(&mut snapshot2, outcome::safe(type_name::get<SAFE>()));
@@ -531,7 +534,7 @@ fun test_multiple_buys_different_outcomes() {
     let preview_cost2 = market.preview_buy_cost<RISKY>(&snapshot2, risky_outcome, amount2);
     let fee_amount2 = market.calculate_fee(preview_cost2);
     let coin2 = mint_tusd(preview_cost2 + fee_amount2, &mut test);
-    let (risky_coin, change2) = market.buy_outcome<RISKY, TUSD>(snapshot2, coin2, risky_outcome, amount2, preview_cost2, test.scenario.ctx());
+    let (risky_coin, change2) = market.buy_outcome<RISKY, TUSD>(snapshot2, coin2, risky_outcome, amount2, preview_cost2, &test.clock, test.scenario.ctx());
 
     assert!(safe_coin.value() == amount1);
     assert!(risky_coin.value() == amount2);
@@ -559,12 +562,12 @@ fun test_redeem_winning_outcome() {
     let preview_cost = market.preview_buy_cost<SAFE>(&snapshot, safe_outcome, amount);
     let fee_amount = market.calculate_fee(preview_cost);
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
-    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, test.scenario.ctx());
+    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
 
-    market.pause_market(&cap);
+    market.pause_market(&cap, &test.clock);
     market.resolve_market(&cap, safe_outcome, &test.clock);
     
-    let redeemed = market.redeem<SAFE, TUSD>(safe_coin, test.scenario.ctx());
+    let redeemed = market.redeem<SAFE, TUSD>(safe_coin, &test.clock, test.scenario.ctx());
     
     assert!(redeemed.value() == amount);
     
@@ -589,13 +592,13 @@ fun test_redeem_losing_outcome_fails() {
     let preview_cost = market.preview_buy_cost<RISKY>(&snapshot, risky_outcome, amount);
     let fee_amount = market.calculate_fee(preview_cost);
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
-    let (risky_coin, _change) = market.buy_outcome<RISKY, TUSD>(snapshot, coin, risky_outcome, amount, preview_cost, test.scenario.ctx());
+    let (risky_coin, _change) = market.buy_outcome<RISKY, TUSD>(snapshot, coin, risky_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
 
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
-    market.pause_market(&cap);
+    market.pause_market(&cap, &test.clock);
     market.resolve_market(&cap, safe_outcome, &test.clock);
     
-    let _redeemed = market.redeem<RISKY, TUSD>(risky_coin, test.scenario.ctx());
+    let _redeemed = market.redeem<RISKY, TUSD>(risky_coin, &test.clock, test.scenario.ctx());
     abort
 
 }
@@ -614,11 +617,11 @@ fun test_redeem_before_resolve_fails() {
     let preview_cost = market.preview_buy_cost<SAFE>(&snapshot, safe_outcome, amount);
     let fee_amount = market.calculate_fee(preview_cost);
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
-    let (safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, test.scenario.ctx());
+    let (safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
 
-    market.pause_market(&cap);
+    market.pause_market(&cap, &test.clock);
     
-    let _redeemed = market.redeem<SAFE, TUSD>(safe_coin, test.scenario.ctx());
+    let _redeemed = market.redeem<SAFE, TUSD>(safe_coin, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -636,11 +639,11 @@ fun test_redeem_not_paused_fails() {
     let preview_cost = market.preview_buy_cost<SAFE>(&snapshot, safe_outcome, amount);
     let fee_amount = market.calculate_fee(preview_cost);
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
-    let (safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, test.scenario.ctx());
+    let (safe_coin, _change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
 
     market.resolve_market(&cap, safe_outcome, &test.clock);
     
-    let _redeemed = market.redeem<SAFE, TUSD>(safe_coin, test.scenario.ctx());
+    let _redeemed = market.redeem<SAFE, TUSD>(safe_coin, &test.clock, test.scenario.ctx());
     abort
 }
 
@@ -673,7 +676,7 @@ fun test_preview_buy_cost_matches_actual() {
     let coin = mint_tusd(preview_cost + fee_amount, &mut test);
     
     let initial_balance = coin.value();
-    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, test.scenario.ctx());
+    let (safe_coin, change) = market.buy_outcome<SAFE, TUSD>(snapshot, coin, safe_outcome, amount, preview_cost, &test.clock, test.scenario.ctx());
     let actual_cost = initial_balance - change.value();
     
     assert!(actual_cost <= preview_cost + market.calculate_fee(preview_cost));
