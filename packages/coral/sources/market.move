@@ -11,6 +11,7 @@ use sui::event;
 use interest_math::fixed18;
 
 use coral::outcome::{Self, Outcome, OutcomeSnapshot};
+use coral::registry::Registry;
 
 public struct Market has key, store {
     id: UID,
@@ -141,9 +142,9 @@ const ETooLittleRevenue: u64 = 10;
 const EMarketPaused: u64 = 11;
 
 const DEFAULT_FEE_BPS: u64 = 10;
-const DEFAULT_LIQUIDITY_PARAM: u64 = 10000000000; 
+const DEFAULT_LIQUIDITY_PARAM: u64 = 10000000000;
 
-public fun create<SAFE: drop, RISKY: drop, C>(safe: SAFE, risky: RISKY, metadata: &CoinMetadata<C>, blob_id: ID, clock: &Clock, ctx: &mut TxContext): (Market, MarketManagerCap) {
+public fun create<SAFE: drop, RISKY: drop, C>(safe: SAFE, risky: RISKY, registry: &mut Registry, metadata: &CoinMetadata<C>, blob_id: ID, clock: &Clock, ctx: &mut TxContext): (Market, MarketManagerCap) {
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
     let risky_outcome = outcome::risky(type_name::get<RISKY>());
 
@@ -174,10 +175,11 @@ public fun create<SAFE: drop, RISKY: drop, C>(safe: SAFE, risky: RISKY, metadata
     });
 
     let market_id = market.id.to_inner();
+    registry.register_market(market_id);
     
     event::emit(MarketCreated {
-        market_id,
         blob_id,
+        market_id,
         coin_type: type_name::get<C>(),
         coin_decimals: metadata.get_decimals(),
         created_at_ms: clock.timestamp_ms(),
