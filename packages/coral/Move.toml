@@ -5,7 +5,7 @@ edition = "2024.beta" # edition = "legacy" to use legacy (pre-2024) Move
 # authors = ["..."]      # e.g., ["Joe Smith (joesmith@noemail.com)", "John Snow (johnsnow@noemail.com)"]
 
 [dependencies]
-InterestMath = { git = "https://github.com/interest-protocol/interest-math.git", rev = "main" }
+interest_math = { r.mvr = "@interest/math" }
 
 # For remote import, use the `{ git = "...", subdir = "...", rev = "..." }`.
 # Revision can be a branch, a tag, and a commit hash.
@@ -35,3 +35,6 @@ coral = "0x0"
 # and `--dev` modes.
 # alice = "0xB0B"
 
+
+[r.mvr]
+network = "testnet"
