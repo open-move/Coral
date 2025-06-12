@@ -2,6 +2,7 @@
 module coral::market_tests;
 
 use std::type_name;
+use std::unit_test::assert_eq;
 
 use sui::test_scenario::{Self, Scenario};
 use sui::test_scenario::TransactionEffects;
@@ -9,9 +10,9 @@ use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
 
 use coral::market::{Self, Market, MarketManagerCap};
+use coral::registry::{Self, Registry};
 use coral::tusd::{Self, TUSD};
 use coral::outcome;
-use std::unit_test::assert_eq;
 
 public struct Test {
     clock: Clock,
@@ -51,10 +52,17 @@ fun create_market(test: &mut Test): (Market, MarketManagerCap) {
     let blob_id = object::id_from_address(BLOB_ID);
     let (treasury_cap, metadata) = tusd::create_tusd(test.scenario.ctx());
 
-    let (market, mgmt_cap) = market::create<SAFE, RISKY, TUSD>(SAFE {}, RISKY {}, &metadata, blob_id, &test.clock, test.scenario.ctx());
+    registry::init_for_testing(test.scenario.ctx());
+    test.scenario.next_tx(MANAGER);
 
-    transfer::public_share_object(metadata);
+    let mut registry = test.scenario.take_shared<Registry>();
+    let (market, mgmt_cap) = market::create<SAFE, RISKY, TUSD>(SAFE {}, RISKY {}, &mut registry, &metadata, blob_id, &test.clock, test.scenario.ctx());
+
+    transfer::public_share_object(registry);
+    // transfer::public_share_object(metadata);
+    transfer::public_transfer(metadata, test.scenario.sender());
     transfer::public_transfer(treasury_cap, test.scenario.sender());
+
     (market, mgmt_cap)
 }
 

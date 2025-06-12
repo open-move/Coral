@@ -144,6 +144,8 @@ const EMarketPaused: u64 = 11;
 const DEFAULT_FEE_BPS: u64 = 10;
 const DEFAULT_LIQUIDITY_PARAM: u64 = 10000000000;
 
+public use fun transfer_cap as MarketManagerCap.transfer;
+
 public fun create<SAFE: drop, RISKY: drop, C>(safe: SAFE, risky: RISKY, registry: &mut Registry, metadata: &CoinMetadata<C>, blob_id: ID, clock: &Clock, ctx: &mut TxContext): (Market, MarketManagerCap) {
     let safe_outcome = outcome::safe(type_name::get<SAFE>());
     let risky_outcome = outcome::risky(type_name::get<RISKY>());

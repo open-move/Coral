@@ -3,7 +3,7 @@ module coral::registry;
 use sui::event;
 use sui::table_vec::{Self, TableVec};
 
-public struct Registry has key {
+public struct Registry has key, store {
     id: UID,
     market_ids: TableVec<ID>,
 }
@@ -28,4 +28,9 @@ public(package) fun register_market(registry: &mut Registry, market_id: ID) {
 
 public fun get_total_markets(registry: &Registry): u64 {
     registry.market_ids.length()
+}
+
+#[test_only]
+public fun init_for_testing(ctx: &mut TxContext) {
+   init(ctx)
 }
