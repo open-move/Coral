@@ -20,7 +20,6 @@ Coral = { local = "../coral" }
 
 [addresses]
 market_factory = "0x0"
-coral = "0x0"
 
 # Named addresses will be accessible in Move as `@name`. They're also exported:
 # for example, `std = "0x1"` is exported by the Standard Library.
